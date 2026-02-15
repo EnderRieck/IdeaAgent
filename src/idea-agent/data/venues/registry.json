@@ -1,0 +1,9 @@
+{
+  "venues": [
+    { "id": "neurips", "name": "NeurIPS", "area": "ML" },
+    { "id": "icml", "name": "ICML", "area": "ML" },
+    { "id": "iclr", "name": "ICLR", "area": "ML" },
+    { "id": "acl", "name": "ACL", "area": "NLP" },
+    { "id": "cvpr", "name": "CVPR", "area": "CV" }
+  ]
+}

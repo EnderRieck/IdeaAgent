@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data
+.idea-agent-data/
+
+# Config files (contain API keys, model settings, etc.)
+idea-agent.config.json
+tools.config.json
+subagents.config.json
+
+# Environment
+.env
+.env.*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
