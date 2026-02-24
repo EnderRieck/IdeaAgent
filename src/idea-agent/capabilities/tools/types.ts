@@ -1,13 +1,13 @@
 import { z } from "zod";
-import type { LoopState } from "../../core/types";
 
 export type JsonSchema = z.ZodTypeAny;
 
+/** @deprecated Use ContextVariables from core/context-variables.ts instead */
 export interface ToolContext {
   sessionId: string;
   runId: string;
   turn: number;
-  state: LoopState;
+  state: Record<string, unknown>;
   nowISO(): string;
 }
 

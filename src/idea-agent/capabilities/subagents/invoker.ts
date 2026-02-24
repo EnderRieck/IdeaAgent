@@ -1,4 +1,5 @@
-import type { LoopState } from "../../core/types";
+/** @deprecated Legacy type kept for backward compatibility */
+type LoopState = { sessionId: string; runId: string; turn: number; [key: string]: unknown };
 import type { ToolInvoker } from "../tools/invoker";
 import type { SubAgentRegistry } from "./registry";
 import type { SyscallHandler, SyscallRequest, SyscallResponse } from "./syscall";

@@ -5,7 +5,7 @@ import {
   resolveResultCount,
   resultLevelSchema,
 } from "../../../capabilities/tools/search-result-level";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 import { getIdeaAgentSettings } from "../../../config/settings";
 import { getToolExtraConfigs } from "../../../config/tool-config";
 import { resolveSummaryLLMOptions, summarizeSearchResults } from "../../../capabilities/tools/search-summarizer";
@@ -100,9 +100,9 @@ function isLowQualityResult(item: WebResultItem): boolean {
     "无法访问此网站",
     "找不到该网页",
     "this site can't be reached",
-    "this site can’t be reached",
+    "this site can't be reached",
     "site can't be reached",
-    "site can’t be reached",
+    "site can't be reached",
     "404 not found",
     "page not found",
   ];
@@ -407,13 +407,11 @@ function resolveLimit(input: z.infer<typeof inputSchema>): number {
   });
 }
 
-export const webSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "web-search",
-  description: "Web search over Brave API with DuckDuckGo/Bing fallback.",
-  inputHint:
-    '{"query":"...","resultLevel":"less|mid|more|extreme"} | {"query":"...","raw":true}',
+export const webSearchTool: NativeTool = {
+  name: "web-search",
+  description: "网页搜索，优先使用 Brave API，自动回退到 DuckDuckGo 或 Bing。",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     const settings = getIdeaAgentSettings();
     const extra = getWebSearchExtraConfig();
     const provider = extra.provider ?? settings.web.provider ?? "brave";
@@ -422,6 +420,8 @@ export const webSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
     const timeoutMs = Math.max(1, timeoutSeconds) * 1000;
 
     const braveKey = extra.apiKey ?? settings.web.apiKey ?? process.env.BRAVE_API_KEY;
+
+    console.error(`[web-search] engine=${provider}${provider === "brave" && !braveKey ? " (no API key, will fallback)" : ""} query="${input.query}"`);
 
     let rawData: unknown;
 
@@ -545,12 +545,12 @@ export const webSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
     }
 
     if (input.raw) {
-      return { ok: true, data: rawData };
+      return { value: JSON.stringify(rawData) };
     }
 
     const llmOptions = resolveSummaryLLMOptions("web-search");
     if (!llmOptions) {
-      return { ok: true, data: rawData };
+      return { value: JSON.stringify(rawData) };
     }
 
     const summaryResult = await summarizeSearchResults(
@@ -563,10 +563,9 @@ export const webSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       const results = record && Array.isArray(record.results) ? record.results : undefined;
       const count = results ? results.length : undefined;
       const prefix = count !== undefined ? `[共 ${count} 条结果]\n\n` : "";
-      return { ok: true, data: `${prefix}${summaryResult.summary}` };
+      return { value: `${prefix}${summaryResult.summary}` };
     }
 
-    // silent fallback to raw data
-    return { ok: true, data: rawData };
+    return { value: JSON.stringify(rawData) };
   },
 };

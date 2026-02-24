@@ -1,15 +1,15 @@
 import { z } from "zod";
-import { OpenAlexClient } from "../clients/openalex-client";
 import {
   SEARCH_TOOL_PROFILES,
   resolveBaseResults,
   resolveResultCount,
   resultLevelSchema,
 } from "../../../capabilities/tools/search-result-level";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 import { getIdeaAgentSettings } from "../../../config/settings";
 import { getToolExtraConfigs } from "../../../config/tool-config";
 import { resolveSummaryLLMOptions, summarizeSearchResults } from "../../../capabilities/tools/search-summarizer";
+import { OpenAlexClient } from "../clients/openalex-client";
 
 const supportedActions = [
   "get_paper",
@@ -59,7 +59,6 @@ const inputSchema = z.object({
 });
 
 const DEFAULT_REFERENCED_WORKS_LIMIT = 10;
-
 
 function readExtraString(extra: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -248,13 +247,11 @@ function truncateReferencedWorks(value: unknown, limit: number): unknown {
   return next;
 }
 
-export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "openalex-search",
-  description: "OpenAlex search and citation-network operations.",
-  inputHint:
-    '{"action":"search_papers","keywords":"llm agent memory","resultLevel":"less|mid|more|extreme"} | {"action":"search_multi_query","queries":["agent memory","rag"],"resultLevel":"mid"} | {"action":"get_paper","arxivId":"2401.12345"} | {"action":"get_paper_by_id","openalexId":"W123..."} | {"action":"expand_citation_network","seedPapers":[{"openalexId":"W123..."}],"maxRefsPerPaper":10,"maxCitationsPerPaper":5} (maxRefsPerPaper<=100, maxCitationsPerPaper<=50)',
+export const openAlexSearchTool: NativeTool = {
+  name: "openalex-search",
+  description: "OpenAlex 学术搜索与引用网络操作。适合传统领域的论文，AI、计算机等新兴领域可能无法及时涵盖",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     const openAlexExtra = getOpenAlexExtraConfig();
     const referencedWorksLimit = openAlexExtra.referencedWorksLimit;
     const client = createClient();
@@ -264,7 +261,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       if (!action) {
         return {
           ok: false,
-          error: `action is required. Supported actions: ${supportedActions.join(", ")}. For semantic search, use {"action":"search_papers","keywords":"..."}.`,
+          value: `Error: action is required. Supported actions: ${supportedActions.join(", ")}. For semantic search, use {"action":"search_papers","keywords":"..."}.`,
         };
       }
 
@@ -273,7 +270,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       switch (action) {
         case "get_paper": {
           if (!input.arxivId) {
-            return { ok: false, error: "arxivId is required for get_paper" };
+            return { ok: false, value: "Error: arxivId is required for get_paper" };
           }
           const paper = await client.getPaper(input.arxivId, input.title);
           rawData = truncateReferencedWorks(paper ?? null, referencedWorksLimit);
@@ -282,7 +279,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
 
         case "get_paper_by_id": {
           if (!input.openalexId) {
-            return { ok: false, error: "openalexId is required for get_paper_by_id" };
+            return { ok: false, value: "Error: openalexId is required for get_paper_by_id" };
           }
           rawData = truncateReferencedWorks(await client.getPaperById(input.openalexId), referencedWorksLimit);
           break;
@@ -290,7 +287,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
 
         case "get_references": {
           if (!input.arxivId) {
-            return { ok: false, error: "arxivId is required for get_references" };
+            return { ok: false, value: "Error: arxivId is required for get_references" };
           }
           const limit = resolveResultWindow({
             explicitCount: undefined,
@@ -302,7 +299,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
 
         case "get_citations": {
           if (!input.arxivId) {
-            return { ok: false, error: "arxivId is required for get_citations" };
+            return { ok: false, value: "Error: arxivId is required for get_citations" };
           }
           const limit = resolveResultWindow({
             explicitCount: undefined,
@@ -315,7 +312,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         case "search_papers": {
           const keywords = resolveKeywords(input);
           if (!keywords) {
-            return { ok: false, error: "keywords or query is required for search_papers" };
+            return { ok: false, value: "Error: keywords or query is required for search_papers" };
           }
           const maxResults = resolveResultWindow({
             explicitCount: undefined,
@@ -334,7 +331,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         case "search_multi_query": {
           const queries = resolveQueryList(input);
           if (queries.length === 0) {
-            return { ok: false, error: "queries is required for search_multi_query" };
+            return { ok: false, value: "Error: queries is required for search_multi_query" };
           }
           const maxTotal = resolveResultWindow({
             explicitCount: undefined,
@@ -358,7 +355,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
 
         case "get_citations_by_oa_id": {
           if (!input.openalexId) {
-            return { ok: false, error: "openalexId is required for get_citations_by_oa_id" };
+            return { ok: false, value: "Error: openalexId is required for get_citations_by_oa_id" };
           }
           const limit = resolveResultWindow({
             explicitCount: undefined,
@@ -370,7 +367,7 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
 
         case "expand_citation_network": {
           if (!input.seedPapers || input.seedPapers.length === 0) {
-            return { ok: false, error: "seedPapers is required for expand_citation_network" };
+            return { ok: false, value: "Error: seedPapers is required for expand_citation_network" };
           }
           rawData = truncateReferencedWorks(
             await client.expandCitationNetwork(
@@ -386,12 +383,12 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       }
 
       if (input.raw) {
-        return { ok: true, data: rawData };
+        return { value: JSON.stringify(rawData) };
       }
 
       const llmOptions = resolveSummaryLLMOptions("openalex-search");
       if (!llmOptions) {
-        return { ok: true, data: rawData };
+        return { value: JSON.stringify(rawData) };
       }
 
       const summaryResult = await summarizeSearchResults(
@@ -402,15 +399,14 @@ export const openAlexSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       if (summaryResult.ok && summaryResult.summary) {
         const count = Array.isArray(rawData) ? rawData.length : undefined;
         const prefix = count !== undefined ? `[共 ${count} 条结果]\n\n` : "";
-        return { ok: true, data: `${prefix}${summaryResult.summary}` };
+        return { value: `${prefix}${summaryResult.summary}` };
       }
 
-      // silent fallback to raw data
-      return { ok: true, data: rawData };
+      return { value: JSON.stringify(rawData) };
     } catch (error) {
       return {
         ok: false,
-        error: error instanceof Error ? error.message : "OpenAlex tool failed",
+        value: `Error: ${error instanceof Error ? error.message : "OpenAlex tool failed"}`,
       };
     }
   },

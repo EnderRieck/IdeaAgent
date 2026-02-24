@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { Tool, ToolContext, ToolResult } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
+import type { ContextVariables, ToolExecutionResult } from "../../../core/context-variables";
 import { getIdeaAgentSettings } from "../../../config/settings";
 
 // ── Data Structures ──
@@ -41,6 +42,7 @@ const inputSchema = z.object({
     "add_questions",
     "update_question",
     "view_full",
+    "deepen_question",
   ]),
   notebookId: z.string().optional(),
   goal: z.string().optional(),
@@ -49,6 +51,7 @@ const inputSchema = z.object({
   findings: z.string().optional(),
   status: z.enum(["pending", "investigating", "answered"]).optional(),
   sources: z.array(z.string()).optional(),
+  deepenTask: z.string().optional(),
 });
 
 type NotebookInput = z.infer<typeof inputSchema>;
@@ -113,6 +116,15 @@ function ensureLoaded(sessionId: string): void {
   if (maxId >= nextId) {
     nextId = maxId + 1;
   }
+}
+
+// ── Text Unescape ──
+
+function unescapeText(text: string): string {
+  return text
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\r/g, "");
 }
 
 // ── Query Normalization (for dedup) ──
@@ -285,14 +297,13 @@ function renderMarkdown(notebook: ResearchNotebook): string {
 
 // ── Operation Handlers ──
 
-function handleCreate(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleCreate(input: NotebookInput, sessionId: string, now: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
 
   if (!input.goal) {
-    return { ok: false, error: "create requires 'goal'" };
+    return { ok: false, value: "Error: create requires 'goal'" };
   }
 
-  // ── Dedup: check if a notebook with similar goal already exists ──
   const normalizedGoal = input.goal.toLowerCase().replace(/\s+/g, " ").trim();
   for (const existing of notebooks.values()) {
     const existingNorm = existing.goal.toLowerCase().replace(/\s+/g, " ").trim();
@@ -302,19 +313,17 @@ function handleCreate(input: NotebookInput, ctx: ToolContext): ToolResult<unknow
       (existingNorm.length >= 20 && normalizedGoal.includes(existingNorm))
     ) {
       return {
-        ok: true,
-        data: {
+        value: JSON.stringify({
           notebookId: existing.notebookId,
           questionCount: existing.questions.length,
           reused: true,
           message: `已存在目标相似的笔记本 ${existing.notebookId}，已自动复用。如需追加问题请用 add_questions。`,
-        },
+        }),
       };
     }
   }
 
   const notebookId = `notebook-${nextId++}`;
-  const now = ctx.nowISO();
 
   const questions: ResearchQuestion[] = (input.questions ?? []).map((q, i) => ({
     id: i + 1,
@@ -334,16 +343,15 @@ function handleCreate(input: NotebookInput, ctx: ToolContext): ToolResult<unknow
   };
 
   notebooks.set(notebookId, notebook);
-  persistNotebook(notebook, ctx.sessionId);
+  persistNotebook(notebook, sessionId);
 
   return {
-    ok: true,
-    data: { notebookId, questionCount: questions.length },
+    value: JSON.stringify({ notebookId, questionCount: questions.length }),
   };
 }
 
-function handleList(ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleList(sessionId: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   const items = Array.from(notebooks.values()).map((nb) => {
     const answered = nb.questions.filter((q) => q.status === "answered").length;
     return {
@@ -357,46 +365,46 @@ function handleList(ctx: ToolContext): ToolResult<unknown> {
     };
   });
 
-  return { ok: true, data: { notebooks: items } };
+  return { value: JSON.stringify({ notebooks: items }) };
 }
 
-function handleView(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleView(input: NotebookInput, sessionId: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   if (!input.notebookId) {
-    return { ok: false, error: "view requires 'notebookId'" };
+    return { ok: false, value: "Error: view requires 'notebookId'" };
   }
 
   const notebook = notebooks.get(input.notebookId);
   if (!notebook) {
-    return { ok: false, error: `Notebook '${input.notebookId}' not found` };
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
   }
 
-  return { ok: true, data: renderCompact(notebook) };
+  return { value: renderCompact(notebook) };
 }
 
-function handleViewQuestion(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleViewQuestion(input: NotebookInput, sessionId: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   if (!input.notebookId || input.questionId == null) {
-    return { ok: false, error: "view_question requires 'notebookId' and 'questionId'" };
+    return { ok: false, value: "Error: view_question requires 'notebookId' and 'questionId'" };
   }
 
   const notebook = notebooks.get(input.notebookId);
   if (!notebook) {
-    return { ok: false, error: `Notebook '${input.notebookId}' not found` };
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
   }
 
-  return { ok: true, data: renderQuestionDetail(notebook, input.questionId) };
+  return { value: renderQuestionDetail(notebook, input.questionId) };
 }
 
-function handleAddQuestions(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleAddQuestions(input: NotebookInput, sessionId: string, now: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   if (!input.notebookId || !input.questions || input.questions.length === 0) {
-    return { ok: false, error: "add_questions requires 'notebookId' and non-empty 'questions'" };
+    return { ok: false, value: "Error: add_questions requires 'notebookId' and non-empty 'questions'" };
   }
 
   const notebook = notebooks.get(input.notebookId);
   if (!notebook) {
-    return { ok: false, error: `Notebook '${input.notebookId}' not found` };
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
   }
 
   const startId = notebook.questions.length + 1;
@@ -416,33 +424,33 @@ function handleAddQuestions(input: NotebookInput, ctx: ToolContext): ToolResult<
     added.push({ id, question: q.question });
   }
 
-  notebook.updatedAt = ctx.nowISO();
-  persistNotebook(notebook, ctx.sessionId);
+  notebook.updatedAt = now;
+  persistNotebook(notebook, sessionId);
 
-  return { ok: true, data: { added } };
+  return { value: JSON.stringify({ added }) };
 }
 
-function handleUpdateQuestion(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleUpdateQuestion(input: NotebookInput, sessionId: string, now: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   if (!input.notebookId || input.questionId == null) {
-    return { ok: false, error: "update_question requires 'notebookId' and 'questionId'" };
+    return { ok: false, value: "Error: update_question requires 'notebookId' and 'questionId'" };
   }
 
   const notebook = notebooks.get(input.notebookId);
   if (!notebook) {
-    return { ok: false, error: `Notebook '${input.notebookId}' not found` };
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
   }
 
   const question = notebook.questions.find((q) => q.id === input.questionId);
   if (!question) {
-    return { ok: false, error: `Question ${input.questionId} not found in ${input.notebookId}` };
+    return { ok: false, value: `Error: Question ${input.questionId} not found in ${input.notebookId}` };
   }
 
-  // Append findings (not overwrite)
   if (input.findings) {
+    const cleaned = unescapeText(input.findings);
     question.findings = question.findings
-      ? `${question.findings}\n\n${input.findings}`
-      : input.findings;
+      ? `${question.findings}\n\n${cleaned}`
+      : cleaned;
   }
 
   if (input.status) {
@@ -457,24 +465,82 @@ function handleUpdateQuestion(input: NotebookInput, ctx: ToolContext): ToolResul
     }
   }
 
-  notebook.updatedAt = ctx.nowISO();
-  persistNotebook(notebook, ctx.sessionId);
+  notebook.updatedAt = now;
+  persistNotebook(notebook, sessionId);
 
-  return { ok: true, data: { updated: true } };
+  return { value: JSON.stringify({ updated: true }) };
 }
 
-function handleViewFull(input: NotebookInput, ctx: ToolContext): ToolResult<unknown> {
-  ensureLoaded(ctx.sessionId);
+function handleViewFull(input: NotebookInput, sessionId: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
   if (!input.notebookId) {
-    return { ok: false, error: "view_full requires 'notebookId'" };
+    return { ok: false, value: "Error: view_full requires 'notebookId'" };
   }
 
   const notebook = notebooks.get(input.notebookId);
   if (!notebook) {
-    return { ok: false, error: `Notebook '${input.notebookId}' not found` };
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
   }
 
-  return { ok: true, data: renderFull(notebook) };
+  return { value: renderFull(notebook) };
+}
+
+function renderResearchBrief(question: ResearchQuestion, deepenTask: string): string {
+  const lines: string[] = [];
+  lines.push("=== 后续深度调研任务 ===");
+  lines.push("");
+  lines.push("## 调研任务");
+  lines.push(deepenTask);
+  lines.push("");
+  lines.push("## 原始问题");
+  lines.push(question.question);
+  lines.push("");
+
+  if (question.findings) {
+    lines.push("## 已有发现（前次调研结果）");
+    lines.push(question.findings);
+    lines.push("");
+  }
+
+  if (question.searches.length > 0) {
+    lines.push("## 已执行的搜索（请勿重复）");
+    for (const s of question.searches) {
+      lines.push(`- ${s.toolId}: ${s.query}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## 通用要求");
+  lines.push(
+    "请基于以上已有信息和调研任务，进行更深入的调研。" +
+    "避免重复已有的搜索，聚焦于尚未覆盖的方面。" +
+    "返回的调研报告应补充新的发现，而非重复已有内容。",
+  );
+  return lines.join("\n");
+}
+
+function handleDeepenQuestion(input: NotebookInput, sessionId: string, now: string): ToolExecutionResult {
+  ensureLoaded(sessionId);
+
+  if (!input.notebookId || input.questionId == null || !input.deepenTask) {
+    return { ok: false, value: "Error: deepen_question requires 'notebookId', 'questionId' and 'deepenTask'" };
+  }
+
+  const notebook = notebooks.get(input.notebookId);
+  if (!notebook) {
+    return { ok: false, value: `Error: Notebook '${input.notebookId}' not found` };
+  }
+
+  const question = notebook.questions.find((q) => q.id === input.questionId);
+  if (!question) {
+    return { ok: false, value: `Error: Question ${input.questionId} not found in ${input.notebookId}` };
+  }
+
+  question.status = "investigating";
+  notebook.updatedAt = now;
+  persistNotebook(notebook, sessionId);
+
+  return { value: renderResearchBrief(question, input.deepenTask) };
 }
 
 // ── Dedup: Record a search attempt on a question ──
@@ -522,41 +588,33 @@ export function getNotebooksSummary(sessionId: string): Array<{
 
 // ── Tool Export ──
 
-export const researchNotebookTool: Tool<NotebookInput, unknown> = {
-  id: "research-notebook",
-  description: "调研笔记本：管理问题驱动的研究过程，记录问题、发现和来源。",
-  inputHint: '{"operation":"view","notebookId":"notebook-1"}',
-  inputFields: [
-    { name: "operation", type: "string", required: true },
-    { name: "notebookId", type: "string", required: false },
-    { name: "goal", type: "string", required: false },
-    { name: "questions", type: "string[]", required: false },
-    { name: "questionId", type: "number", required: false },
-    { name: "findings", type: "string", required: false },
-    { name: "status", type: "string", required: false },
-    { name: "sources", type: "string[]", required: false },
-  ],
-  outputFormat: "{ ok, data: varies by operation }",
+export const researchNotebookTool: NativeTool = {
+  name: "research-notebook",
+  description: "调研笔记本：管理问题驱动的研究过程，记录问题、发现和来源。内容应尽量详实",
   inputSchema,
+  async execute(input: NotebookInput, ctx): Promise<ToolExecutionResult> {
+    const sessionId = (ctx.sessionId as string) ?? "default";
+    const now = new Date().toISOString();
 
-  async execute(input: NotebookInput, ctx: ToolContext): Promise<ToolResult<unknown>> {
     switch (input.operation) {
       case "create":
-        return handleCreate(input, ctx);
+        return handleCreate(input, sessionId, now);
       case "list":
-        return handleList(ctx);
+        return handleList(sessionId);
       case "view":
-        return handleView(input, ctx);
+        return handleView(input, sessionId);
       case "view_question":
-        return handleViewQuestion(input, ctx);
+        return handleViewQuestion(input, sessionId);
       case "add_questions":
-        return handleAddQuestions(input, ctx);
+        return handleAddQuestions(input, sessionId, now);
       case "update_question":
-        return handleUpdateQuestion(input, ctx);
+        return handleUpdateQuestion(input, sessionId, now);
       case "view_full":
-        return handleViewFull(input, ctx);
+        return handleViewFull(input, sessionId);
+      case "deepen_question":
+        return handleDeepenQuestion(input, sessionId, now);
       default:
-        return { ok: false, error: `Unknown operation: ${input.operation}` };
+        return { ok: false, value: `Error: Unknown operation: ${input.operation}` };
     }
   },
 };

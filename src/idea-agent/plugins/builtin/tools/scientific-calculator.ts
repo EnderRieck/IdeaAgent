@@ -1,31 +1,31 @@
 import { z } from "zod";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
+
+const allowedPattern = /^[\d\s()+\-*/.,^eEpiPIa-zA-Z]+$/;
 
 const inputSchema = z.object({
   expression: z.string().min(1),
 });
 
-const allowedPattern = /^[\d\s()+\-*/.,^eEpiPIa-zA-Z]+$/;
-
-export const scientificCalculatorTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "scientific-calculator",
-  description: "Evaluate scientific numeric expressions using Math context.",
+export const scientificCalculatorTool: NativeTool = {
+  name: "scientific-calculator",
+  description: "使用 Math 上下文计算科学数值表达式。",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     try {
       const normalized = input.expression.replace(/\^/g, "**");
       if (!allowedPattern.test(normalized)) {
-        return { ok: false, error: "Expression contains forbidden characters" };
+        return { ok: false, value: "Error: Expression contains forbidden characters" };
       }
 
       const result = Function("Math", `return (${normalized});`)(Math);
       if (typeof result !== "number" || Number.isNaN(result)) {
-        return { ok: false, error: "Expression did not evaluate to a valid number" };
+        return { ok: false, value: "Error: Expression did not evaluate to a valid number" };
       }
 
-      return { ok: true, data: { value: result } };
+      return { value: JSON.stringify({ value: result }) };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Calculation failed" };
+      return { ok: false, value: `Error: ${error instanceof Error ? error.message : "Calculation failed"}` };
     }
   },
 };

@@ -45,7 +45,7 @@ export class RunTextLogger {
     dataDir?: string;
     sessionId: string;
     runId: string;
-    goal: string;
+    goal?: string;
   }): Promise<RunTextLogger> {
     const baseDir = params.dataDir ?? ".idea-agent-data";
     const logDir = path.join(baseDir, "sessions", params.sessionId, "logs");

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { z } from "zod";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 
 const inputSchema = z.object({
   command: z.string().min(1),
@@ -40,14 +40,12 @@ function runCommand(command: string, args: string[], cwd: string | undefined, ti
   });
 }
 
-export const localCliTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "local-cli",
-  description: "Run local shell commands. Explicit approval is always required.",
+export const localCliTool: NativeTool = {
+  name: "local-cli",
+  description: "执行本地 Shell 命令，每次调用均需用户明确批准。",
   inputSchema,
-  requiresApproval() {
-    return true;
-  },
-  async execute(input) {
+  requiresApproval: true,
+  async execute(input: z.infer<typeof inputSchema>) {
     try {
       const result = await runCommand(
         input.command,
@@ -55,9 +53,9 @@ export const localCliTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         input.cwd,
         input.timeoutMs ?? 30000,
       );
-      return { ok: true, data: result };
+      return { value: JSON.stringify(result) };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "local-cli failed" };
+      return { ok: false, value: `Error: ${error instanceof Error ? error.message : "local-cli failed"}` };
     }
   },
 };

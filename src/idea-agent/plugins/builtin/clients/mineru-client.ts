@@ -33,7 +33,7 @@ export class MineruClient {
     }
   }
 
-  async parseWithStorage(pdfUrl: string, savePath: string, maxPages: number = 5): Promise<ParseResult> {
+  async parseWithStorage(pdfUrl: string, savePath: string): Promise<ParseResult> {
     const pdfContent = await this.downloadPdf(pdfUrl);
     if (!pdfContent) {
       return { markdown: "", parser: "pdf-parse-basic" };
@@ -48,7 +48,7 @@ export class MineruClient {
     }
 
     try {
-      const markdown = await this.parseBufferWithMineru(pdfContent, path.basename(savePath), maxPages);
+      const markdown = await this.parseBufferWithMineru(pdfContent, path.basename(savePath));
       return { markdown, pdfPath: savePath, parser: "mineru" };
     } catch {
       const markdown = await this.parsePdfWithFallback(pdfContent);
@@ -56,7 +56,7 @@ export class MineruClient {
     }
   }
 
-  async parse(pdfUrl: string, maxPages: number = 5): Promise<ParseResult> {
+  async parse(pdfUrl: string): Promise<ParseResult> {
     const pdfContent = await this.downloadPdf(pdfUrl);
     if (!pdfContent) {
       return { markdown: "", parser: "pdf-parse-basic" };
@@ -70,7 +70,7 @@ export class MineruClient {
     try {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "idea-agent-mineru-"));
       const fileName = `paper-${Date.now()}.pdf`;
-      const markdown = await this.parseBufferWithMineru(pdfContent, fileName, maxPages);
+      const markdown = await this.parseBufferWithMineru(pdfContent, fileName);
       await fs.rm(tmpDir, { recursive: true, force: true });
       return { markdown, parser: "mineru" };
     } catch {
@@ -79,7 +79,7 @@ export class MineruClient {
     }
   }
 
-  async parseFile(filePath: string, maxPages: number = 5): Promise<ParseResult> {
+  async parseFile(filePath: string): Promise<ParseResult> {
     const buffer = await fs.readFile(filePath);
     if (!this.apiUrl) {
       return {
@@ -90,7 +90,7 @@ export class MineruClient {
     }
 
     try {
-      const markdown = await this.parseBufferWithMineru(buffer, path.basename(filePath), maxPages);
+      const markdown = await this.parseBufferWithMineru(buffer, path.basename(filePath));
       return { markdown, pdfPath: filePath, parser: "mineru" };
     } catch {
       return {
@@ -101,7 +101,7 @@ export class MineruClient {
     }
   }
 
-  private async parseBufferWithMineru(buffer: Buffer, fileName: string, maxPages: number): Promise<string> {
+  private async parseBufferWithMineru(buffer: Buffer, fileName: string): Promise<string> {
     if (!this.apiUrl) {
       throw new Error("MinerU API URL not configured");
     }
@@ -110,8 +110,6 @@ export class MineruClient {
     const formData = new FormData();
     formData.append("files", new Blob([bytes], { type: "application/pdf" }), fileName);
     formData.append("return_md", "true");
-    formData.append("start_page_id", "0");
-    formData.append("end_page_id", String(Math.max(0, maxPages - 1)));
 
     const response = await fetch(`${this.apiUrl}/file_parse`, {
       method: "POST",

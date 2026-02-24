@@ -6,7 +6,7 @@ import {
   resolveResultCount,
   resultLevelSchema,
 } from "../../../capabilities/tools/search-result-level";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 import { getIdeaAgentSettings } from "../../../config/settings";
 import { resolveSummaryLLMOptions, summarizeSearchResults } from "../../../capabilities/tools/search-summarizer";
 
@@ -66,13 +66,11 @@ function resolveMultiQueryCounts(input: z.infer<typeof inputSchema>, queryCount:
   };
 }
 
-export const arxivSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "arxiv-search",
-  description: "Search arXiv papers and fetch metadata by arXiv ID.",
-  inputHint:
-    '{"keywords":"llm agent memory","resultLevel":"less|mid|more|extreme"} | {"arxivId":"2401.12345"} | {"queries":["agent memory","rag"],"resultLevel":"mid"}',
+export const arxivSearchTool: NativeTool = {
+  name: "arxiv-search",
+  description: "搜索 arXiv 论文，支持关键词检索和按 arXiv ID 获取元数据。适合搜索计算机/AI领域的论文",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     try {
       let rawData: unknown;
 
@@ -88,7 +86,7 @@ export const arxivSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       } else {
         const keywords = resolveKeywords(input);
         if (!keywords) {
-          return { ok: false, error: "Either arxivId, queries, keywords, or query must be provided." };
+          return { ok: false, value: "Error: Either arxivId, queries, keywords, or query must be provided." };
         }
         const maxResults = resolveSingleQueryMaxResults(input);
         rawData = await client.search({
@@ -99,12 +97,12 @@ export const arxivSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       }
 
       if (input.raw) {
-        return { ok: true, data: rawData };
+        return { value: JSON.stringify(rawData) };
       }
 
       const llmOptions = resolveSummaryLLMOptions("arxiv-search");
       if (!llmOptions) {
-        return { ok: true, data: rawData };
+        return { value: JSON.stringify(rawData) };
       }
 
       const summaryResult = await summarizeSearchResults(
@@ -115,13 +113,12 @@ export const arxivSearchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       if (summaryResult.ok && summaryResult.summary) {
         const count = Array.isArray(rawData) ? rawData.length : undefined;
         const prefix = count !== undefined ? `[共 ${count} 条结果]\n\n` : "";
-        return { ok: true, data: `${prefix}${summaryResult.summary}` };
+        return { value: `${prefix}${summaryResult.summary}` };
       }
 
-      // silent fallback to raw data
-      return { ok: true, data: rawData };
+      return { value: JSON.stringify(rawData) };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "arXiv tool failed" };
+      return { ok: false, value: `Error: ${error instanceof Error ? error.message : "arXiv tool failed"}` };
     }
   },
 };

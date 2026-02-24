@@ -1,4 +1,6 @@
-import type { AgentAction, LoopState } from "../core/types";
+/** @deprecated Use ApprovalGate from core/agent-loop.ts instead */
+type AgentAction = { type: string; toolId: string; [key: string]: unknown };
+type LoopState = Record<string, unknown>;
 import type { UserBridge } from "./user-bridge";
 
 export interface ApprovalGate {

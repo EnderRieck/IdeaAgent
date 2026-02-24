@@ -1,19 +1,60 @@
-import type { PluginModule } from "../types";
+import type { NativeTool } from "../../core/native-tool";
+import type { AgentDefinition } from "../../core/context-variables";
 import { builtinToolCatalog, builtinToolList } from "./tool-catalog";
-import { deepSearchAgent } from "./subagents/deep-search-agent";
-import { reviewerAgent } from "./subagents/reviewer-agent";
-import { paperSummaryAgent } from "./subagents/paper-summary-agent";
+import {
+  deepSearchAgentDefinition,
+  deepSearchAgentId,
+  deepSearchAgentDescription,
+} from "./subagents/deep-search-agent";
+import {
+  reviewerAgentDefinition,
+  reviewerAgentId,
+  reviewerAgentDescription,
+} from "./subagents/reviewer-agent";
+import {
+  paperSummaryAgentDefinition,
+  paperSummaryAgentId,
+  paperSummaryAgentDescription,
+} from "./subagents/paper-summary-agent";
 
-export const builtinPlugin: PluginModule = {
-  manifest: {
-    id: "builtin-capabilities",
-    version: "0.1.0",
-    name: "Builtin capabilities",
-    capabilities: {
-      tools: Object.keys(builtinToolCatalog),
-      subagents: [deepSearchAgent.id, reviewerAgent.id, paperSummaryAgent.id],
-    },
-  },
+// ── SubAgent descriptor (for registration) ────────────────────────
+
+export interface SubAgentDescriptor {
+  id: string;
+  description: string;
+  definition: AgentDefinition;
+  maxTurns?: number;
+}
+
+// ── Builtin Plugin ────────────────────────────────────────────────
+
+export interface BuiltinPluginExport {
+  tools: NativeTool[];
+  toolCatalog: Record<string, NativeTool>;
+  subAgentDescriptors: SubAgentDescriptor[];
+}
+
+export const builtinPlugin: BuiltinPluginExport = {
   tools: builtinToolList,
-  subAgents: [deepSearchAgent, reviewerAgent, paperSummaryAgent],
+  toolCatalog: builtinToolCatalog,
+  subAgentDescriptors: [
+    {
+      id: deepSearchAgentId,
+      description: deepSearchAgentDescription,
+      definition: deepSearchAgentDefinition,
+      maxTurns: 6,
+    },
+    {
+      id: reviewerAgentId,
+      description: reviewerAgentDescription,
+      definition: reviewerAgentDefinition,
+      maxTurns: 6,
+    },
+    {
+      id: paperSummaryAgentId,
+      description: paperSummaryAgentDescription,
+      definition: paperSummaryAgentDefinition,
+      maxTurns: 8,
+    },
+  ],
 };

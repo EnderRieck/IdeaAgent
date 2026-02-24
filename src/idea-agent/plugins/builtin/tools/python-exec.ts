@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { z } from "zod";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 
 const inputSchema = z.object({
   code: z.string().min(1),
@@ -38,22 +38,16 @@ function runPython(code: string, timeoutMs: number): Promise<{ stdout: string; s
   });
 }
 
-export const pythonExecTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "python-exec",
-  description: "Execute Python snippets for plotting/calculation tasks.",
+export const pythonExecTool: NativeTool = {
+  name: "python-exec",
+  description: "执行 Python 代码片段，用于绘图和计算任务。不要用于美化输出，请改用 Markdown。",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     try {
       const result = await runPython(input.code, input.timeoutMs ?? 15000);
-      return {
-        ok: true,
-        data: result,
-      };
+      return { value: JSON.stringify(result) };
     } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : "Python execution failed",
-      };
+      return { ok: false, value: `Error: ${error instanceof Error ? error.message : "Python execution failed"}` };
     }
   },
 };

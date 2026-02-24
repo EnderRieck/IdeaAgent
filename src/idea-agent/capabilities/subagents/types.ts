@@ -1,4 +1,3 @@
-import type { LoopState } from "../../core/types";
 import type { SyscallRequest, SyscallResponse } from "./syscall";
 
 export type SubAgentTask = string;
@@ -20,7 +19,7 @@ export interface SubAgentContext {
   sessionId: string;
   runId: string;
   turn: number;
-  state: LoopState;
+  state: Record<string, unknown>;
   reportProgress?(update: SubAgentProgressUpdate): Promise<void> | void;
   reportError?(detail: SubAgentErrorDetail): Promise<void> | void;
   syscall?(request: SyscallRequest): Promise<SyscallResponse>;

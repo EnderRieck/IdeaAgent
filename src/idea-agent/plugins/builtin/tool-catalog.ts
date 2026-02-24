@@ -1,5 +1,4 @@
-import type { Tool } from "../../capabilities/tools/types";
-import type { ToolCatalog } from "../../capabilities/tools/tool-setup";
+import type { NativeTool } from "../../core/native-tool";
 import { arxivSearchTool } from "./tools/arxiv-search";
 import { localCliTool } from "./tools/local-cli";
 import { mineruParseTool } from "./tools/mineru-parse";
@@ -13,7 +12,7 @@ import { venueSearchTool } from "./tools/venue-search";
 import { webFetchTool } from "./tools/web-fetch";
 import { webSearchTool } from "./tools/web-search";
 
-export const builtinToolCatalog: ToolCatalog = {
+export const builtinToolCatalog: Record<string, NativeTool> = {
   "arxiv-search": arxivSearchTool,
   "local-cli": localCliTool,
   "mineru-parse": mineruParseTool,
@@ -28,4 +27,4 @@ export const builtinToolCatalog: ToolCatalog = {
   "web-search": webSearchTool,
 };
 
-export const builtinToolList: Tool[] = Object.values(builtinToolCatalog);
+export const builtinToolList: NativeTool[] = Object.values(builtinToolCatalog);

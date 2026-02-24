@@ -1,6 +1,6 @@
 import { z } from "zod";
 import venueRegistry from "../../../data/venues/registry.json";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 
 const inputSchema = z.object({
   keyword: z.string().min(1).optional(),
@@ -14,11 +14,11 @@ type Venue = {
   area: string;
 };
 
-export const venueSearchTool: Tool<z.infer<typeof inputSchema>, Venue[]> = {
-  id: "venue-search",
-  description: "Search top venues from local registry.",
+export const venueSearchTool: NativeTool = {
+  name: "venue-search",
+  description: "从本地注册表中搜索顶级学术会议和期刊。",
   inputSchema,
-  async execute(input) {
+  async execute(input: z.infer<typeof inputSchema>) {
     const rows = (venueRegistry.venues as Venue[]).filter((row) => {
       const matchKeyword = input.keyword
         ? `${row.id} ${row.name}`.toLowerCase().includes(input.keyword.toLowerCase())
@@ -28,8 +28,7 @@ export const venueSearchTool: Tool<z.infer<typeof inputSchema>, Venue[]> = {
     });
 
     return {
-      ok: true,
-      data: rows.slice(0, input.limit ?? 20),
+      value: JSON.stringify(rows.slice(0, input.limit ?? 20)),
     };
   },
 };

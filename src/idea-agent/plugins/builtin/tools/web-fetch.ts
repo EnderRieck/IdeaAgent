@@ -4,7 +4,8 @@ import { z } from "zod";
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
+import type { ContextVariables } from "../../../core/context-variables";
 import { getIdeaAgentSettings } from "../../../config/settings";
 
 const inputSchema = z.object({
@@ -174,20 +175,22 @@ function shouldDownload(params: {
   return /\.pdf($|\?)/i.test(params.url);
 }
 
-export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "web-fetch",
+export const webFetchTool: NativeTool = {
+  name: "web-fetch",
   description:
-    "Fetch webpage/file content from URL. Supports downloading files to local storage directory for downstream tools (e.g., mineru-parse with filePath).",
-  inputHint:
-    '{"url":"https://example.com","mode":"text"} | {"url":"https://arxiv.org/pdf/2401.12345.pdf","mode":"download","fileName":"paper.pdf"}',
+    "抓取并查看网页或文件内容。" +
+    "mode 说明：auto（默认，根据Content-Type自动选择：HTML→提取正文转Markdown，JSON→格式化输出，PDF→自动下载）；" +
+    "text（强制返回纯文本，去除HTML标签）；html（返回原始HTML）；json（解析并格式化JSON）；" +
+    "download（将文件下载到会话存储目录，供后续使用，如论文PDF解析等）。",
   inputSchema,
-  async execute(input, ctx) {
+  async execute(input: z.infer<typeof inputSchema>, ctx) {
     try {
       const settings = getIdeaAgentSettings();
       const timeoutMs = (input.timeoutSeconds ?? 30) * 1000;
       const maxChars = input.maxChars ?? 20_000;
       const dataDir = settings.memory.dataDir ?? ".idea-agent-data";
-      const storageDir = path.resolve(process.cwd(), dataDir, "sessions", ctx.sessionId, "session_data", "downloads");
+      const sessionId = (ctx.sessionId as string) ?? "default";
+      const storageDir = path.resolve(process.cwd(), dataDir, "sessions", sessionId, "session_data", "downloads");
 
       const response = await fetchWithTimeout(
         input.url,
@@ -205,7 +208,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       if (!response.ok) {
         return {
           ok: false,
-          error: `web-fetch failed: ${response.status} ${response.statusText}`,
+          value: `Error: web-fetch failed: ${response.status} ${response.statusText}, trying again may work.`,
         };
       }
 
@@ -226,8 +229,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         await fs.writeFile(filePath, bytes);
 
         return {
-          ok: true,
-          data: {
+          value: JSON.stringify({
             mode: "download",
             url: input.url,
             finalUrl,
@@ -236,7 +238,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
             bytes: bytes.length,
             filePath,
             storageDir,
-          },
+          }),
         };
       }
 
@@ -249,8 +251,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
           const serialized = JSON.stringify(parsed, null, 2);
           const truncated = truncateText(serialized, maxChars);
           return {
-            ok: true,
-            data: {
+            value: JSON.stringify({
               mode: "json",
               url: input.url,
               finalUrl,
@@ -259,13 +260,12 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
               content: truncated.content,
               truncated: truncated.truncated,
               storageDir,
-            },
+            }),
           };
         } catch {
           const truncated = truncateText(text, maxChars);
           return {
-            ok: true,
-            data: {
+            value: JSON.stringify({
               mode: "text",
               url: input.url,
               finalUrl,
@@ -274,7 +274,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
               content: truncated.content,
               truncated: truncated.truncated,
               storageDir,
-            },
+            }),
           };
         }
       }
@@ -282,8 +282,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
       if (input.mode === "html") {
         const truncated = truncateText(text, maxChars);
         return {
-          ok: true,
-          data: {
+          value: JSON.stringify({
             mode: "html",
             url: input.url,
             finalUrl,
@@ -293,7 +292,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
             content: truncated.content,
             truncated: truncated.truncated,
             storageDir,
-          },
+          }),
         };
       }
 
@@ -302,8 +301,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         if (mdResult) {
           const truncated = truncateText(mdResult.markdown, maxChars);
           return {
-            ok: true,
-            data: {
+            value: JSON.stringify({
               mode: "markdown",
               url: input.url,
               finalUrl,
@@ -313,7 +311,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
               content: truncated.content,
               truncated: truncated.truncated,
               storageDir,
-            },
+            }),
           };
         }
 
@@ -321,8 +319,7 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
         const fallbackText = stripHtml(text);
         const truncated = truncateText(fallbackText, maxChars);
         return {
-          ok: true,
-          data: {
+          value: JSON.stringify({
             mode: "text",
             url: input.url,
             finalUrl,
@@ -333,14 +330,13 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
             truncated: truncated.truncated,
             readabilityFailed: true,
             storageDir,
-          },
+          }),
         };
       }
 
       const truncated = truncateText(text, maxChars);
       return {
-        ok: true,
-        data: {
+        value: JSON.stringify({
           mode: "text",
           url: input.url,
           finalUrl,
@@ -349,12 +345,12 @@ export const webFetchTool: Tool<z.infer<typeof inputSchema>, unknown> = {
           content: truncated.content,
           truncated: truncated.truncated,
           storageDir,
-        },
+        }),
       };
     } catch (error) {
       return {
         ok: false,
-        error: error instanceof Error ? error.message : "web-fetch failed",
+        value: `Error: ${error instanceof Error ? error.message : "web-fetch failed"}`,
       };
     }
   },

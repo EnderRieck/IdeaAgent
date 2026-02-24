@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { Tool } from "../../../capabilities/tools/types";
+import type { NativeTool } from "../../../core/native-tool";
 import { getIdeaAgentSettings } from "../../../config/settings";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -12,25 +12,20 @@ const inputSchema = z.object({
   maxBytes: z.number().int().positive().max(MAX_FILE_SIZE).optional(),
 });
 
-export const readSessionFilesTool: Tool<z.infer<typeof inputSchema>, unknown> = {
-  id: "read-session-files",
+export const readSessionFilesTool: NativeTool = {
+  name: "read-session-files",
   description:
-    "Read a file from the current session's data directory (session_data/). " +
-    "Covers downloads, parsed-markdown, notebooks and other session artifacts. " +
-    "Use this to read downloaded PDFs, parsed results, notebooks, etc.",
-  inputFields: [
-    { name: "filePath", type: "string", required: true, description: "Absolute path to the session data file" },
-    { name: "encoding", type: "string", required: false, description: "utf-8 (default) or base64" },
-    { name: "maxBytes", type: "number", required: false, description: "Max bytes to read, default 10MB" },
-  ],
+    "读取当前会话数据目录（session_data/<current_session_id>）中的文件内容" +
+    "包括下载文件、解析后的 Markdown、笔记本等会话产物。",
   inputSchema,
-  async execute(input, ctx) {
+  async execute(input: z.infer<typeof inputSchema>, ctx) {
     const encoding = input.encoding ?? "utf-8";
     const maxBytes = input.maxBytes ?? MAX_FILE_SIZE;
 
     const settings = getIdeaAgentSettings();
     const dataDir = settings.memory.dataDir ?? ".idea-agent-data";
-    const sessionDataRoot = path.resolve(process.cwd(), dataDir, "sessions", ctx.sessionId, "session_data");
+    const sessionId = (ctx.sessionId as string) ?? "default";
+    const sessionDataRoot = path.resolve(process.cwd(), dataDir, "sessions", sessionId, "session_data");
 
     const resolved = path.resolve(input.filePath);
     const normalized = path.normalize(resolved);
@@ -38,20 +33,20 @@ export const readSessionFilesTool: Tool<z.infer<typeof inputSchema>, unknown> = 
     if (!normalized.startsWith(sessionDataRoot + path.sep) && normalized !== sessionDataRoot) {
       return {
         ok: false,
-        error: `Access denied: path must be under ${sessionDataRoot}`,
+        value: `Error: Access denied: path must be under ${sessionDataRoot}`,
       };
     }
 
     try {
       const info = await stat(resolved);
       if (!info.isFile()) {
-        return { ok: false, error: `Not a file: ${resolved}` };
+        return { ok: false, value: `Error: Not a file: ${resolved}` };
       }
 
       if (info.size > maxBytes) {
         return {
           ok: false,
-          error: `File size (${info.size} bytes) exceeds current maxBytes limit (${maxBytes}). To read this file, increase the maxBytes parameter (up to 10485760).`,
+          value: `Error: File size (${info.size} bytes) exceeds current maxBytes limit (${maxBytes}). To read this file, increase the maxBytes parameter (up to 10485760).`,
         };
       }
 
@@ -61,17 +56,16 @@ export const readSessionFilesTool: Tool<z.infer<typeof inputSchema>, unknown> = 
         : buffer.toString("utf-8");
 
       return {
-        ok: true,
-        data: {
+        value: JSON.stringify({
           filePath: resolved,
           size: info.size,
           encoding,
           content,
-        },
+        }),
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : "read-session-files failed";
-      return { ok: false, error: msg };
+      return { ok: false, value: `Error: ${msg}` };
     }
   },
 };

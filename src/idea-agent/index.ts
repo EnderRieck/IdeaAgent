@@ -1,33 +1,23 @@
-import path from "node:path";
 import { setupGlobalProxy } from "./runtime/proxy-setup";
 import { EventBus } from "./core/event-bus";
-import { LLMMainAgent } from "./core/llm-main-agent";
-import type { MainAgent } from "./core/decision";
-import { AgentKernel } from "./core/kernel";
-import { LLMContextCompactor, PassthroughContextCompactor } from "./core/context-compactor";
-import { ToolRegistry } from "./capabilities/tools/registry";
-import type { Tool, ToolInputFieldSpec } from "./capabilities/tools/types";
-import { SubAgentRegistry } from "./capabilities/subagents/registry";
-import {
-  SEARCH_TOOL_PROFILES,
-  appendResultLevelHint,
-  buildResultLevelCounts,
-  resolveBaseResults,
-} from "./capabilities/tools/search-result-level";
-import { ToolInvoker } from "./capabilities/tools/invoker";
-import type { ToolPolicy } from "./capabilities/tools/policy";
-import { SubAgentInvoker } from "./capabilities/subagents/invoker";
-import { InteractiveApprovalGate, RejectingApprovalGate } from "./runtime/approval-gate";
-import { AutoUserBridge, type UserBridge, InteractiveUserBridge } from "./runtime/user-bridge";
-import { MemoryManager } from "./memory/manager";
-import { FileMemoryStore } from "./memory/store";
+import type { NativeTool } from "./core/native-tool";
+import { LLMClient } from "./core/llm-client";
+import { LLMMessageCompressor } from "./core/message-compressor";
+import { createAskUserTool, createSwitchPhaseTool } from "./core/builtin-tools";
+import type { UserBridge } from "./runtime/user-bridge";
+import { createSubAgentTool } from "./core/subagent-tool";
+import type { ApprovalGate } from "./core/agent-loop";
+import { buildPhaseAgents } from "./core/main-agent";
 import { SessionRunner } from "./runtime/session-runner";
 import { resolveRuntimeConfig } from "./runtime/config";
-import { PluginManager } from "./plugins/manager";
+import { AutoUserBridge, InteractiveUserBridge } from "./runtime/user-bridge";
+import { MemoryManager } from "./memory/manager";
+import { FileMemoryStore } from "./memory/store";
 import { builtinPlugin } from "./plugins/builtin/plugin";
-import type { LoopState } from "./core/types";
 import { getIdeaAgentSettings, type IdeaAgentSettings } from "./config/settings";
-import { getToolRuntimeProfile } from "./config/tool-config";
+import { getSubAgentRuntimeProfile } from "./config/subagent-config";
+
+// ── Options ───────────────────────────────────────────────────────
 
 export interface CreateRuntimeOptions {
   configPath?: string;
@@ -52,57 +42,27 @@ export interface CreateRuntimeOptions {
     model?: string;
     temperature?: number;
     maxTokens?: number;
-    constraintsMaxChars?: number;
-    dialogueMaxChars?: number;
-    recallQueryMaxChars?: number;
-    recentDialogueMaxChars?: number;
-    historyMessagesMaxChars?: number;
   };
+  /** Externally provided UserBridge (e.g. from Ink UI) */
+  userBridge?: UserBridge;
+  /** Externally provided waitForUserInput callback (e.g. from Ink UI) */
+  waitForUserInput?: () => Promise<string | null>;
 }
+
+// ── Runtime ───────────────────────────────────────────────────────
 
 export interface IdeaAgentRuntime {
   runner: SessionRunner;
   eventBus: EventBus;
-  toolRegistry: ToolRegistry;
-  subAgentRegistry: SubAgentRegistry;
-  pluginManager: PluginManager;
+  toolRegistry: Map<string, NativeTool>;
   settings: IdeaAgentSettings;
   close(): Promise<void>;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
 function randomId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function resolveMainAgent(
-  settings: IdeaAgentSettings,
-  capabilities: {
-    tools: Array<{ id: string; description: string; inputHint?: string; inputFields?: ToolInputFieldSpec[]; outputFormat?: string }>;
-    subAgents: Array<{ id: string; description: string }>;
-  },
-  contextCompactor: LLMContextCompactor | PassthroughContextCompactor,
-): MainAgent {
-  const openai = settings.openai;
-  const apiKey = openai.apiKey;
-
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is required. IdeaAgent is LLM-only and cannot run without model credentials.");
-  }
-
-  return new LLMMainAgent({
-    apiKey,
-    baseUrl: openai.baseUrl,
-    model: openai.model,
-    temperature: openai.temperature,
-    maxTokens: openai.maxTokens,
-    systemPrompt: openai.systemPrompt,
-    tools: capabilities.tools,
-    subAgents: capabilities.subAgents,
-    contextCompactor,
-    recentDialogueMaxChars: settings.contextCompact.recentDialogueMaxChars,
-    historyMessagesMaxChars: settings.contextCompact.historyMessagesMaxChars,
-    debugPrompts: settings.runtime.debugPrompts === true,
-  });
 }
 
 function resolveSettings(options?: CreateRuntimeOptions): IdeaAgentSettings {
@@ -123,65 +83,31 @@ function safeCloseBridge(userBridge: UserBridge): void {
   }
 }
 
-function buildToolInputHint(
-  tool: { id: string; inputHint?: string },
-  settings: IdeaAgentSettings,
-): string | undefined {
-  switch (tool.id) {
-    case "web-search": {
-      const profile = SEARCH_TOOL_PROFILES.web;
-      const base = resolveBaseResults(settings.web.maxResults, profile.defaultBaseResults, profile.maxResults);
-      const counts = buildResultLevelCounts(base, profile.maxResults);
-      return appendResultLevelHint(tool.inputHint, counts);
-    }
+// ── Simple Approval Gate ──────────────────────────────────────────
 
-    case "arxiv-search": {
-      const profile = SEARCH_TOOL_PROFILES.arxiv;
-      const base = resolveBaseResults(settings.arxiv.maxResults, profile.defaultBaseResults, profile.maxResults);
-      const counts = buildResultLevelCounts(base, profile.maxResults);
-      return appendResultLevelHint(tool.inputHint, counts);
-    }
+class SimpleApprovalGate implements ApprovalGate {
+  constructor(
+    private readonly userBridge: UserBridge,
+    private readonly sensitiveTools: Set<string>,
+    private readonly autoApprove: boolean,
+  ) {}
 
-    case "openalex-search": {
-      const profile = SEARCH_TOOL_PROFILES.openalex;
-      const base = resolveBaseResults(settings.openalex.maxResults, profile.defaultBaseResults, profile.maxResults);
-      const counts = buildResultLevelCounts(base, profile.maxResults);
-      return appendResultLevelHint(tool.inputHint, counts);
-    }
+  async shouldApprove(toolName: string, _input: unknown): Promise<boolean> {
+    if (!this.sensitiveTools.has(toolName)) return true;
+    if (this.autoApprove) return true;
 
-    case "web-fetch": {
-      const dataDir = settings.memory.dataDir ?? ".idea-agent-data";
-      const baseHint = tool.inputHint?.trim() ?? "{}";
-      return `${baseHint}; storageBaseDir=${dataDir}/sessions/<sessionId>/session_data/downloads; 下载PDF后将返回filePath传给mineru-parse.filePath`;
-    }
-
-    default:
-      return tool.inputHint;
+    const answer = await this.userBridge.ask({
+      prompt: `工具 "${toolName}" 需要审批。是否允许执行？`,
+      options: [
+        { id: "Y", text: "允许" },
+        { id: "N", text: "拒绝" },
+      ],
+    });
+    return answer.toLowerCase().startsWith("y");
   }
 }
 
-function resolveToolCapability(tool: Tool, settings: IdeaAgentSettings): {
-  id: string;
-  description: string;
-  inputHint?: string;
-  inputFields?: ToolInputFieldSpec[];
-  outputFormat?: string;
-} {
-  const profile = getToolRuntimeProfile(tool.id, {
-    description: tool.description,
-    inputHint: tool.inputHint,
-    inputFields: tool.inputFields,
-    outputFormat: tool.outputFormat,
-  });
-
-  return {
-    id: tool.id,
-    description: profile.description,
-    inputHint: buildToolInputHint({ id: tool.id, inputHint: profile.inputHint }, settings),
-    inputFields: profile.inputFields,
-    outputFormat: profile.outputFormat,
-  };
-}
+// ── Create Runtime ────────────────────────────────────────────────
 
 export async function createIdeaAgentRuntime(options?: CreateRuntimeOptions): Promise<IdeaAgentRuntime> {
   setupGlobalProxy();
@@ -192,118 +118,112 @@ export async function createIdeaAgentRuntime(options?: CreateRuntimeOptions): Pr
 
   const settings = resolveSettings(options);
   const runtimeConfig = resolveRuntimeConfig(settings.runtime);
-
   const eventBus = new EventBus();
-  const toolRegistry = new ToolRegistry();
-  const subAgentRegistry = new SubAgentRegistry();
 
-  const pluginManager = new PluginManager(toolRegistry, subAgentRegistry, {
-    env: process.env,
-    nowISO: () => new Date().toISOString(),
-  });
-  await pluginManager.register(builtinPlugin);
-
-  const userBridge: UserBridge = settings.runtime.interactive ? new InteractiveUserBridge() : new AutoUserBridge();
-  const sensitiveTools = new Set<string>(["local-cli"]);
-
-  const approvalGate = settings.runtime.interactive || settings.runtime.autoApproveSensitiveTools
-    ? new InteractiveApprovalGate(userBridge, sensitiveTools, settings.runtime.autoApproveSensitiveTools === true)
-    : new RejectingApprovalGate(sensitiveTools);
-
-  // Collect per-tool timeout overrides from tools.config.json
-  const policyOverrides: Record<string, Partial<ToolPolicy>> = {};
-  for (const tool of toolRegistry.list()) {
-    const profile = getToolRuntimeProfile(tool.id, {
-      description: tool.description,
-      inputHint: tool.inputHint,
-      inputFields: tool.inputFields,
-      outputFormat: tool.outputFormat,
-    });
-    if (typeof profile.timeoutMs === "number") {
-      policyOverrides[tool.id] = { timeoutMs: profile.timeoutMs };
-    }
+  // LLM Client
+  const apiKey = settings.openai.apiKey;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is required. IdeaAgent is LLM-only and cannot run without model credentials.");
   }
 
-  const toolInvoker = new ToolInvoker(
-    toolRegistry,
-    approvalGate,
-    { timeoutMs: runtimeConfig.toolDefaultTimeoutMs },
-    undefined,
-    Object.keys(policyOverrides).length > 0 ? policyOverrides : undefined,
-  );
-
-  const contextCompactor = settings.contextCompact.enabled === false
-    ? new PassthroughContextCompactor()
-    : new LLMContextCompactor({
-        apiKey: settings.openai.apiKey ?? "",
-        baseUrl: settings.contextCompact.baseUrl ?? settings.openai.baseUrl,
-        model: settings.contextCompact.model ?? settings.openai.model,
-        temperature: settings.contextCompact.temperature,
-        maxTokens: settings.contextCompact.maxTokens,
-      });
-
-  const capabilities = {
-    tools: toolRegistry.list().map((tool) => resolveToolCapability(tool, settings)),
-    subAgents: subAgentRegistry.list().map((subAgent) => ({ id: subAgent.id, description: subAgent.description })),
-  };
-
-  const kernel = new AgentKernel({
-    mainAgent: resolveMainAgent(settings, capabilities, contextCompactor),
-    toolInvoker,
-    subAgentInvoker: new SubAgentInvoker(subAgentRegistry, {
-      onProgress: async (event) => {
-        await eventBus.emit({
-          name: "subagent.progress",
-          payload: {
-            subAgentId: event.subAgentId,
-            stage: event.stage,
-            payload: event.payload,
-          },
-          at: new Date().toISOString(),
-          runId: event.runId,
-          sessionId: event.sessionId,
-          turn: event.turn,
-        });
-      },
-      onError: async (event) => {
-        await eventBus.emit({
-          name: "error.detail",
-          payload: {
-            ...event.detail,
-            subAgentId: event.subAgentId,
-          },
-          at: new Date().toISOString(),
-          runId: event.runId,
-          sessionId: event.sessionId,
-          turn: event.turn,
-        });
-      },
-    }, toolInvoker),
-    userBridge,
-    contextCompactor,
-    constraintsMaxChars: settings.contextCompact.constraintsMaxChars ?? 12_000,
-    dialogueMaxChars: settings.contextCompact.dialogueMaxChars ?? 16_000,
-    nowISO: () => new Date().toISOString(),
+  const llmClient = new LLMClient({
+    apiKey,
+    baseUrl: settings.openai.baseUrl,
   });
 
+  // Message compressor
+  const compressor = settings.contextCompact?.enabled !== false
+    ? new LLMMessageCompressor(
+        llmClient,
+        settings.contextCompact?.model ?? settings.openai.model ?? "gpt-4o-mini",
+      )
+    : undefined;
+
+  // User bridge (prefer externally injected)
+  const userBridge: UserBridge = options?.userBridge
+    ?? (settings.runtime.interactive ? new InteractiveUserBridge() : new AutoUserBridge());
+
+  // Approval gate
+  const sensitiveTools = new Set<string>(["local-cli"]);
+  const approvalGate = new SimpleApprovalGate(
+    userBridge,
+    sensitiveTools,
+    settings.runtime.autoApproveSensitiveTools === true,
+  );
+
+  // Build tool registry from builtin plugin
+  const toolRegistry = new Map<string, NativeTool>();
+
+  // Register all builtin tools
+  for (const tool of builtinPlugin.tools) {
+    toolRegistry.set(tool.name, tool);
+  }
+
+  // Register ask_user tool
+  const askUserTool = createAskUserTool(userBridge);
+  toolRegistry.set(askUserTool.name, askUserTool);
+
+  // Register subagents as tools (merge subagents.config.json overrides)
+  for (const descriptor of builtinPlugin.subAgentDescriptors) {
+    const def = descriptor.definition;
+    const profile = getSubAgentRuntimeProfile(descriptor.id, {
+      model: settings.openai.model ?? "gpt-5.2",
+      systemPrompt: typeof def.instructions === "string" ? def.instructions : "",
+      allowedTools: def.tools,
+      maxTurns: descriptor.maxTurns,
+    });
+
+    const agentDefinition = {
+      ...def,
+      model: profile.model,
+      instructions: profile.systemPrompt || def.instructions,
+      tools: profile.allowedTools,
+    };
+
+    const subAgentTool = createSubAgentTool({
+      name: descriptor.id,
+      description: descriptor.description,
+      agentDefinition,
+      toolRegistry,
+      llmClient,
+      maxTurns: profile.maxTurns ?? descriptor.maxTurns,
+      compressor,
+      eventBus,
+    });
+    toolRegistry.set(subAgentTool.name, subAgentTool);
+  }
+
+  // Build phase agents and register switch_phase tool
+  const allToolNames = [...Array.from(toolRegistry.keys()), "switch_phase"];
+  const phaseAgents = buildPhaseAgents(allToolNames, settings.openai.model);
+  const switchPhaseTool = createSwitchPhaseTool(userBridge, phaseAgents);
+  toolRegistry.set(switchPhaseTool.name, switchPhaseTool);
+  const mainAgent = phaseAgents.discover;
+
+  // Memory
   const memory = new MemoryManager(new FileMemoryStore(settings.memory.dataDir));
 
+  // Wait-for-user-input callback (prefer externally injected)
+  const waitForUserInput = options?.waitForUserInput;
+
+  // Session runner
   const runner = new SessionRunner({
-    kernel,
+    agent: mainAgent,
+    toolRegistry,
+    llmClient,
     memory,
     eventBus,
     config: runtimeConfig,
-    contextCompactor,
-    recallQueryMaxChars: settings.contextCompact.recallQueryMaxChars ?? 6_000,
-    nowISO: () => new Date().toISOString(),
+    dataDir: settings.memory.dataDir,
+    compressor,
+    approvalGate,
+    waitForUserInput,
   });
 
   return {
     runner,
     eventBus,
     toolRegistry,
-    subAgentRegistry,
-    pluginManager,
     settings,
     async close() {
       safeCloseBridge(userBridge);
@@ -311,16 +231,17 @@ export async function createIdeaAgentRuntime(options?: CreateRuntimeOptions): Pr
   };
 }
 
-export function createInitialState(goal?: string): LoopState {
+// ── Create Initial Session ────────────────────────────────────────
+
+export function createInitialSession(): {
+  sessionId: string;
+  runId: string;
+} {
   return {
     sessionId: randomId("session"),
     runId: randomId("run"),
-    turn: 1,
-    status: "init",
-    goal,
-    toolResults: [],
-    subAgentResults: [],
-    memorySnapshot: {},
-    evidenceRefs: [],
   };
 }
+
+// Legacy alias
+export const createInitialState = createInitialSession;

@@ -1,4 +1,29 @@
-import type { SubAgentTask } from "../capabilities/subagents/types";
+import type { z } from "zod";
+
+// ── ChatMessage types (OpenAI-compatible) ──────────────────────────
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } };
+
+export type ChatMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | ContentPart[] }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; name: string; content: string };
+
+export interface ToolDefinition {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
+// ── Legacy types (kept for backward compatibility during migration) ──
 
 export type LoopStatus =
   | "init"
@@ -17,74 +42,11 @@ export interface AskUserOption {
 export interface AskUserQuestion {
   prompt: string;
   details?: string;
-  options?: AskUserOption[];
+  options: AskUserOption[];
   allowMultiple?: boolean;
-}
-
-export type AgentAction =
-  | { type: "call_tool"; toolId: string; input: unknown }
-  | { type: "call_subagent"; subAgentId: string; task: SubAgentTask }
-  | { type: "ask_user"; question: AskUserQuestion }
-  | { type: "respond"; message: string }
-  | { type: "finish"; reason?: string };
-
-export interface AgentDecision {
-  actions: AgentAction[];
-  metadata?: Record<string, unknown>;
-  notes?: string;
-}
-
-export interface ToolExecutionRecord {
-  toolId: string;
-  input: unknown;
-  ok: boolean;
-  data?: unknown;
-  error?: string;
-  approvalRequested?: boolean;
-  approvalApproved?: boolean;
-  attempts?: number;
-  at: string;
-}
-
-export interface SubAgentExecutionRecord {
-  ok: boolean;
-  subAgentResult?: string;
-  error?: string;
-}
-
-export interface PendingApproval {
-  action: AgentAction;
-  reason: string;
-  requestedAt: string;
-}
-
-export interface PendingQuestion {
-  question: AskUserQuestion;
-  askedAt: string;
-}
-
-export interface LoopState {
-  sessionId: string;
-  runId: string;
-  turn: number;
-  status: LoopStatus;
-  goal?: string;
-  constraints?: string[];
-  pendingApproval?: PendingApproval;
-  pendingQuestion?: PendingQuestion;
-  toolResults: ToolExecutionRecord[];
-  subAgentResults: SubAgentExecutionRecord[];
-  memorySnapshot: Record<string, unknown>;
-  evidenceRefs: string[];
-  metadata?: Record<string, unknown>;
-  lastError?: string;
 }
 
 export interface RuntimeDeps {
   nowISO(): string;
   randomId(prefix: string): string;
-}
-
-export interface KernelContext {
-  maxTurns: number;
 }
