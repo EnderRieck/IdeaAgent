@@ -30,7 +30,7 @@ export const deepSearchAgentDefinition: AgentDefinition = {
 - 通过Arxiv进行预印本论文搜索
 - 通过websearch可以进行联网搜索
 - 通过webfetch可以对你感兴趣的网页进行细节查看，也可以下载论文到本地。
-- 当你想**深入查看某篇论文**（这也是你调研中必要的工作）时，你被鼓励通过syscall的方式，调用PaperSummaryAgent来解析并总结论文，并告知它应该着重哪些方面，这样可以节约你的上下文额度，避免被长篇幅论文污染 
+- 通过syscall的方式，调用PaperSummaryAgent来解析并总结论文，并告知它应该着重哪些方面，这样可以节约你的上下文额度，避免被长篇幅论文污染 
 `,
 };
 

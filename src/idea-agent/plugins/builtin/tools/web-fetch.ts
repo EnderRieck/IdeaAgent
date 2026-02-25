@@ -237,7 +237,7 @@ export const webFetchTool: NativeTool = {
             contentType,
             bytes: bytes.length,
             filePath,
-            storageDir,
+            fileName: path.basename(filePath),
           }),
         };
       }

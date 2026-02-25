@@ -164,37 +164,77 @@ function UserMessage({ content }: { content: string }) {
   );
 }
 
-/* ── Main OutputLog ────────────────────────────────────── */
+/* ── Settled / Active split ────────────────────────────── */
 
-const MAX_ITEMS = 200;
+/**
+ * Find the boundary between "settled" items (won't change) and
+ * "active" items (thinking spinner / pending tools) at the tail.
+ * Everything before the boundary goes into <Static>.
+ */
+function findSettledBoundary(items: DisplayItem[]): number {
+  let boundary = items.length;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === "tool" && item.status === "pending") {
+      boundary = i;
+      continue;
+    }
+    if (item.kind === "turn" && item.thinking) {
+      boundary = i;
+      break;
+    }
+    break;
+  }
+  return boundary;
+}
+
+/* ── Render a single DisplayItem ──────────────────────── */
+
+function RenderItem({ item }: { item: DisplayItem }) {
+  const { Text } = getInk();
+  switch (item.kind) {
+    case "session":
+      return <Text dimColor>Session: {item.sessionId}</Text>;
+    case "turn":
+      return <TurnHeader turn={item.turn} agent={item.agent} thinking={item.thinking} />;
+    case "message":
+      return <AgentMessage content={item.content} />;
+    case "user-message":
+      return <UserMessage content={item.content} />;
+    case "tool":
+      return <ToolCall item={item} />;
+    case "status":
+      return <RunStatus type={item.type} text={item.text} />;
+  }
+}
+
+/* ── Main OutputLog ────────────────────────────────────── */
 
 interface OutputLogProps {
   events: AgentEvent[];
 }
 
 export function OutputLog({ events }: OutputLogProps) {
-  const { Box, Text } = getInk();
+  const { Box, Static } = getInk();
   const items = useMemo(() => buildDisplayItems(events), [events]);
-  const visible = items.length > MAX_ITEMS ? items.slice(-MAX_ITEMS) : items;
+  const splitIdx = findSettledBoundary(items);
+  const settled = items.slice(0, splitIdx);
+  const live = items.slice(splitIdx);
 
   return (
     <Box flexDirection="column">
-      {visible.map((item, i) => {
-        switch (item.kind) {
-          case "session":
-            return <Text key={i} dimColor>Session: {item.sessionId}</Text>;
-          case "turn":
-            return <TurnHeader key={i} turn={item.turn} agent={item.agent} thinking={item.thinking} />;
-          case "message":
-            return <AgentMessage key={i} content={item.content} />;
-          case "user-message":
-            return <UserMessage key={i} content={item.content} />;
-          case "tool":
-            return <ToolCall key={i} item={item} />;
-          case "status":
-            return <RunStatus key={i} type={item.type} text={item.text} />;
-        }
-      })}
+      <Static items={settled}>
+        {(item: DisplayItem, i: number) => (
+          <Box key={i} flexDirection="column">
+            <RenderItem item={item} />
+          </Box>
+        )}
+      </Static>
+      {live.map((item, i) => (
+        <Box key={`live-${i}`} flexDirection="column">
+          <RenderItem item={item} />
+        </Box>
+      ))}
     </Box>
   );
 }

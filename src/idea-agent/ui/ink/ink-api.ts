@@ -5,6 +5,7 @@ interface InkAPI {
   render: typeof import("ink")["render"];
   Box: typeof import("ink")["Box"];
   Text: typeof import("ink")["Text"];
+  Static: typeof import("ink")["Static"];
   useInput: typeof import("ink")["useInput"];
   useApp: typeof import("ink")["useApp"];
 }
@@ -21,6 +22,7 @@ export async function initInk(): Promise<InkAPI> {
       render: mod.render,
       Box: mod.Box,
       Text: mod.Text,
+      Static: mod.Static,
       useInput: mod.useInput,
       useApp: mod.useApp,
     };

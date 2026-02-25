@@ -66,6 +66,13 @@ declare module "ink" {
     pageDown: boolean;
   }
 
+  interface StaticProps<T> {
+    items: T[];
+    children: (item: T, index: number) => ReactNode;
+  }
+
+  export const Static: <T>(props: StaticProps<T>) => ReactNode;
+
   export function useInput(handler: (input: string, key: KeyInput) => void): void;
   export function useApp(): { exit(error?: Error): void };
 }
